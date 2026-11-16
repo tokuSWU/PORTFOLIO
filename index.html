@@ -170,6 +170,7 @@ button:focus-visible{outline:2px solid var(--pen);outline-offset:2px}
     </div>
     <div class="tools">
       <button class="tool" id="zoomBtn" type="button" aria-pressed="false">Zoom in</button>
+      <button class="tool" id="sndBtn" type="button">Sound: on</button>
       <button class="tool" id="fsBtn" type="button">Full screen</button>
     </div>
   </header>
@@ -256,6 +257,70 @@ button:focus-visible{outline:2px solid var(--pen);outline-offset:2px}
     })(s);
   }
 
+  // Paper sounds, synthesised from filtered noise (no audio files).
+  // page(): one sheet turning, a swish through the air and a soft landing.
+  // riffle(): several sheets fanning past, ending in a heavier thud; used for jumps and for both covers.
+  var Snd = (function(){
+    var ctx = null, noise = null, master = null, on = true;
+    try { on = localStorage.getItem('flipSound') !== 'off'; } catch (e) {}
+    function ready(){
+      if (!on) return false;
+      try {
+        if (!ctx){
+          var AC = window.AudioContext || window.webkitAudioContext;
+          if (!AC) return false;
+          ctx = new AC();
+          var len = ctx.sampleRate * 2, d;
+          noise = ctx.createBuffer(1, len, ctx.sampleRate);
+          d = noise.getChannelData(0);
+          for (var i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+          master = ctx.createGain(); master.gain.value = 0.85; master.connect(ctx.destination);
+        }
+        if (ctx.state === 'suspended') ctx.resume();
+        return true;
+      } catch (e) { return false; }
+    }
+    // one shaped burst of noise: filter sweeps f0 -> f1 while the level rises to peak and dies away
+    function burst(t, dur, type, f0, f1, q, peak, attack){
+      var src = ctx.createBufferSource(); src.buffer = noise; src.loop = true;
+      src.playbackRate.value = 0.8 + Math.random() * 0.4;
+      var flt = ctx.createBiquadFilter(); flt.type = type; flt.Q.value = q;
+      flt.frequency.setValueAtTime(f0, t); flt.frequency.exponentialRampToValueAtTime(f1, t + dur);
+      var g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(peak, t + attack);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      src.connect(flt); flt.connect(g); g.connect(master);
+      src.start(t, Math.random() * 1.5); src.stop(t + dur + 0.05);
+    }
+    function page(ms){
+      if (!ready()) return;
+      var t = ctx.currentTime + 0.01, d = (ms || 850) / 1000, v = 0.9 + Math.random() * 0.2;
+      burst(t, d * 0.46, 'bandpass', 800 * v, 3600 * v, 0.7, 0.30, d * 0.16);          // sheet sweeping through the air
+      burst(t + d * 0.05, d * 0.30, 'highpass', 4500, 7500, 0.5, 0.09, d * 0.07);       // crisp rustle on top
+      burst(t + d * 0.66, 0.07, 'bandpass', 2400 * v, 1300, 1.2, 0.20, 0.008);          // edge touching down
+      burst(t + d * 0.66, 0.10, 'lowpass', 320, 120, 0.7, 0.26, 0.010);                 // soft pat of the sheet
+    }
+    function riffle(n, land){
+      if (!ready()) return;
+      var t = ctx.currentTime + 0.01, k;
+      n = Math.max(3, Math.min(14, n));
+      burst(t, n * 0.07 + 0.35, 'highpass', 2800, 5200, 0.4, 0.07, 0.10);               // continuous rustle under the fan
+      for (k = 0; k < n; k++){
+        burst(t + k * 0.07 + Math.random() * 0.015, 0.12, 'bandpass', 1700 + Math.random() * 1400, 4400, 1.0, 0.20, 0.012);
+      }
+      land = Math.max(land, n * 0.07 + 0.1);
+      burst(t + land, 0.18, 'lowpass', 240, 80, 0.8, 0.55, 0.012);                      // the stack or cover landing
+      burst(t + land, 0.07, 'bandpass', 1600, 900, 1.0, 0.20, 0.006);                   // slap on top of the thud
+    }
+    return {
+      page: page, riffle: riffle,
+      isOn: function(){ return on; },
+      set: function(v){ on = v; try { localStorage.setItem('flipSound', v ? 'on' : 'off'); } catch (e) {} }
+    };
+  })();
+  function isCover(i){ return i === 0 || i === L - 1; }
+
   var cur = 0;        // index of the open spread = number of leaves turned
   var W = 0;          // book width in px
 
@@ -320,6 +385,11 @@ button:focus-visible{outline:2px solid var(--pen);outline-offset:2px}
     if (target === cur) return;
     var from = cur, k = 0, many = Math.abs(target - from) > 1;
     cur = target;
+    var steps = Math.abs(target - from);
+    var cover = from === 0 || target === 0 || from === N - 1 || target === N - 1;
+    if (steps > 1) Snd.riffle(steps, ((steps - 1) * 70 + (cover ? 950 : 650)) * 0.78 / 1000);
+    else if (cover) Snd.riffle(5, 0.74);
+    else Snd.page(850);
     var run = function(i, delay){
       setTimeout(function(){ animate(i, home(i), (i === 0 || i === L - 1) ? 950 : many ? 650 : 850); }, delay);
     };
@@ -380,9 +450,10 @@ button:focus-visible{outline:2px solid var(--pen);outline-offset:2px}
       if (e && e.type === 'pointerup') goTo(cur + (d.right ? 1 : -1));
       return;
     }
-    var a = angle[d.i];
+    var a = angle[d.i], before = cur;
     if (d.right && a < -55) cur = d.i + 1;
     else if (!d.right && a > -125) cur = d.i;
+    if (cur !== before){ if (isCover(d.i)) Snd.riffle(3, 0.5); else Snd.page(620); }
     animate(d.i, home(d.i), 700);
     hint.style.visibility = 'hidden';
   }
@@ -430,6 +501,11 @@ button:focus-visible{outline:2px solid var(--pen);outline-offset:2px}
     if (zoomed && downAt && Math.abs(e.clientX - downAt[0]) + Math.abs(e.clientY - downAt[1]) < 6) setZoom(false);
     downAt = null;
   });
+
+  var sndBtn = document.getElementById('sndBtn');
+  function showSnd(){ sndBtn.textContent = 'Sound: ' + (Snd.isOn() ? 'on' : 'off'); }
+  sndBtn.addEventListener('click', function(){ Snd.set(!Snd.isOn()); showSnd(); if (Snd.isOn()) Snd.page(850); });
+  showSnd();
 
   fsBtn.addEventListener('click', function(){
     try {
