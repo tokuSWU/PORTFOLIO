@@ -82,14 +82,14 @@ button:focus-visible{outline:2px solid var(--pen);outline-offset:2px}
 }
 /* soft shadow on the table; script resizes it to whatever the book covers as the covers swing */
 .ground{
-  position:absolute;top:0;bottom:0;z-index:0;pointer-events:none;border-radius:2px;
+  position:absolute;top:0;bottom:0;left:0;width:50%;transform-origin:left center;will-change:transform;z-index:0;pointer-events:none;border-radius:2px;
   box-shadow:0 30px 50px -18px rgba(29,28,31,.55),0 8px 14px rgba(29,28,31,.25);
 }
 .base,.leaf{position:absolute;top:0;height:100%;width:50%}
 .base{z-index:1;background:var(--paper);overflow:hidden}
 .base.l{left:0}
 .base.r{left:50%}
-.leaf{left:calc(50% + var(--g));width:calc(50% - var(--g));transform-origin:calc(-1 * var(--g)) center;transform-style:preserve-3d;z-index:2}
+.leaf{will-change:transform;left:calc(50% + var(--g));width:calc(50% - var(--g));transform-origin:calc(-1 * var(--g)) center;transform-style:preserve-3d;z-index:2}
 .face{
   position:absolute;inset:0;background:var(--paper);overflow:hidden;
   backface-visibility:hidden;-webkit-backface-visibility:hidden;
@@ -117,19 +117,19 @@ button:focus-visible{outline:2px solid var(--pen);outline-offset:2px}
   position:absolute;left:0;right:0;height:calc(var(--hr) * 1.7);transform:translateY(-50%);
   border-radius:99px;
   background:linear-gradient(to bottom,#6a6a70 0,#1d1c1f 30%,transparent 31%,transparent 62%,#6a6a70 63%,#1d1c1f 92%,#000 100%);
-  filter:drop-shadow(0 1.5px 1px rgba(29,28,31,.35));
+  box-shadow:0 1.5px 1.5px rgba(29,28,31,.3);
 }
-/* gutter shadow at the spine, plus a dimmer that follows the flip angle */
+/* dimmer that follows the flip angle: only its opacity changes, so the page itself is never repainted */
+.shade{position:absolute;inset:0;z-index:2;background:rgb(29,28,31);opacity:0;pointer-events:none;will-change:opacity}
+/* gutter shadow at the spine */
 .base::after,.face::after{content:"";position:absolute;inset:0;pointer-events:none}
 .base.r::after,.face.front::after{
   background:
-    linear-gradient(to right,rgba(29,28,31,.10),transparent 7%),
-    rgba(29,28,31,var(--dim,0));
+    linear-gradient(to right,rgba(29,28,31,.10),transparent 7%);
 }
 .base.l::after,.face.back::after{
   background:
-    linear-gradient(to left,rgba(29,28,31,.10),transparent 7%),
-    rgba(29,28,31,var(--dim,0));
+    linear-gradient(to left,rgba(29,28,31,.10),transparent 7%);
 }
 
 /* controls */
@@ -225,6 +225,7 @@ button:focus-visible{outline:2px solid var(--pen);outline-offset:2px}
   function img(src, alt){
     var im = new Image();
     im.decoding = 'async'; im.draggable = false; im.alt = alt; im.src = src;
+    if (src.charAt(0) === 'p' && im.decode) im.decode().catch(function(){});
     return im;
   }
   function div(cls){ var d = document.createElement('div'); d.className = cls; return d; }
@@ -233,7 +234,7 @@ button:focus-visible{outline:2px solid var(--pen);outline-offset:2px}
   // states 1 to 11 are PDF spreads 2 to 12.
   // leaf 0: front = cover, back = left page of spread 2
   // leaf i: front = right page of spread i+1, back = left page of spread i+2 (the last back is the back cover)
-  var leaves = [], angle = [], moving = [], raf = [];
+  var leaves = [], angle = [], moving = [], raf = [], shades = [], dims = [], zs = [];
   var ground = div('ground'); book.appendChild(ground);
   for (var i = 0; i < L; i++){
     var leaf = div('leaf');
@@ -244,6 +245,8 @@ button:focus-visible{outline:2px solid var(--pen);outline-offset:2px}
     f.appendChild(i === 0 ? img('p/01a.jpg', 'Front cover') : img('p/' + pad(i + 1) + 'b.jpg', 'Spread ' + (i + 1) + ', right page'));
     var b = div('face back');
     b.appendChild(i === L - 1 ? img('p/' + pad(N) + 'a.jpg', 'Back cover') : img('p/' + pad(i + 2) + 'a.jpg', 'Spread ' + (i + 2) + ', left page'));
+    var sf = div('shade'), sb = div('shade');
+    f.appendChild(sf); b.appendChild(sb); shades.push([sf, sb]); dims.push('0'); zs.push(0);
     leaf.appendChild(f); leaf.appendChild(b);
     book.appendChild(leaf);
     leaves.push(leaf); angle.push(0); moving.push(false); raf.push(0);
@@ -359,8 +362,12 @@ button:focus-visible{outline:2px solid var(--pen);outline-offset:2px}
     angle[i] = a;
     var el = leaves[i];
     el.style.transform = 'perspective(' + Math.round(W * 2.4) + 'px) rotateY(' + a.toFixed(2) + 'deg)';
-    el.style.setProperty('--dim', (Math.sin(-a * Math.PI / 180) * 0.22).toFixed(3));
-    if (moving[i]) el.style.zIndex = a > -90 ? 100 + (L - i) : 100 + i;
+    var dim = (Math.sin(-a * Math.PI / 180) * 0.22).toFixed(3);
+    if (dim !== dims[i]){ dims[i] = dim; shades[i][0].style.opacity = dim; shades[i][1].style.opacity = dim; }
+    if (moving[i]){
+      var z = a > -90 ? 100 + (L - i) : 100 + i;
+      if (z !== zs[i]){ zs[i] = z; el.style.zIndex = z; }
+    }
     if (i === 0 || i === L - 1) place();
   }
   // Keep whatever is on the table centred: a closed book is one page wide, an open one two.
@@ -378,19 +385,19 @@ button:focus-visible{outline:2px solid var(--pen);outline-offset:2px}
     }
     camS = s; visH = Hpx * s;
     book.style.transform = 'translateX(' + (-c * s).toFixed(1) + 'px) scale(' + s.toFixed(4) + ')';
-    ground.style.left = (pw + le).toFixed(1) + 'px';
-    ground.style.width = (re - le).toFixed(1) + 'px';
+    ground.style.transform = 'translateX(' + (pw + le).toFixed(1) + 'px) scaleX(' + ((re - le) / pw).toFixed(4) + ')';
   }
   function panTo(to, dur){
     cancelAnimationFrame(fraf);
     fT = to;
-    var from = f, t0 = performance.now();
+    var from = f, t0 = 0;
     if (reduce || from === to){ f = to; place(); return; }
-    (function step(now){
+    fraf = requestAnimationFrame(function step(now){
+      if (!t0) t0 = now;
       var t = Math.min(1, (now - t0) / dur);
       f = from + (to - from) * ease(t); place();
       if (t < 1) fraf = requestAnimationFrame(step);
-    })(t0);
+    });
   }
   // one step forward or back: in single-page view that is half a spread at a time
   function step(d){
@@ -403,7 +410,8 @@ button:focus-visible{outline:2px solid var(--pen);outline-offset:2px}
     for (var i = 0; i < L; i++){
       var el = leaves[i];
       if (!moving[i]){
-        el.style.zIndex = i < cur ? 2 + i : 2 + (L - i);
+        zs[i] = i < cur ? 2 + i : 2 + (L - i);
+        el.style.zIndex = zs[i];
         el.style.visibility = (i === 0 || i === L - 1 || (i >= cur - 2 && i <= cur + 1)) ? 'visible' : 'hidden';
       } else {
         el.style.visibility = 'visible';
@@ -429,14 +437,15 @@ button:focus-visible{outline:2px solid var(--pen);outline-offset:2px}
     if (reduce || from === to){ moving[i] = false; setAngle(i, to); settle(); return; }
     dur = dur * Math.max(.35, Math.abs(to - from) / 180);
     moving[i] = true;
-    var t0 = performance.now();
+    var t0 = 0;
     settle();
-    (function step(now){
+    raf[i] = requestAnimationFrame(function step(now){
+      if (!t0) t0 = now;
       var t = Math.min(1, (now - t0) / dur);
       setAngle(i, from + (to - from) * ease(t));
       if (t < 1){ raf[i] = requestAnimationFrame(step); }
       else { moving[i] = false; settle(); }
-    })(t0);
+    });
   }
   function home(i){ return i < cur ? -180 : 0; }   // where leaf i belongs for the current spread
   function goTo(target){
